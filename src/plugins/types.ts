@@ -298,8 +298,7 @@ export type PluginHookName =
   | "session_start"
   | "session_end"
   | "gateway_start"
-  | "gateway_stop"
-  | "pre_llm_request";
+  | "gateway_stop";
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -461,31 +460,6 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
-// pre_llm_request hook - runs right before LLM prompt is sent
-export type PluginHookPreLlmRequestContext = {
-  agentId?: string;
-  sessionKey?: string;
-  workspaceDir?: string;
-  provider?: string;
-  modelId?: string;
-};
-
-export type PluginHookPreLlmRequestEvent = {
-  /** The prompt being sent to the LLM */
-  prompt: string;
-  /** The current message history (can be modified by returning new messages) */
-  messages: AgentMessage[];
-  /** Images being sent with the prompt */
-  images?: unknown[];
-};
-
-export type PluginHookPreLlmRequestResult = {
-  /** Modified messages to use instead of the original */
-  messages?: AgentMessage[];
-  /** Modified prompt to use instead of the original */
-  prompt?: string;
-};
-
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_agent_start: (
@@ -541,10 +515,6 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
-  pre_llm_request: (
-    event: PluginHookPreLlmRequestEvent,
-    ctx: PluginHookPreLlmRequestContext,
-  ) => Promise<PluginHookPreLlmRequestResult | void> | PluginHookPreLlmRequestResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
