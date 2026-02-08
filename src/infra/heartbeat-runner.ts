@@ -525,8 +525,9 @@ export async function runHeartbeatOnce(opts: {
   const isCronEventReason = Boolean(opts.reason?.startsWith("cron:"));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  let heartbeatFileContent: string | null = null;
   try {
-    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     if (
       isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
       !isExecEventReason &&
@@ -541,7 +542,7 @@ export async function runHeartbeatOnce(opts: {
     }
   } catch {
     // File doesn't exist or can't be read - proceed with heartbeat.
-    // The LLM prompt says "if it exists" so this is expected behavior.
+    heartbeatFileContent = null;
   }
 
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
@@ -583,11 +584,17 @@ export async function runHeartbeatOnce(opts: {
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
   const hasCronEvents = isCronEvent && pendingEvents.length > 0;
 
-  const prompt = hasExecCompletion
-    ? EXEC_EVENT_PROMPT
-    : hasCronEvents
-      ? CRON_EVENT_PROMPT
-      : resolveHeartbeatPrompt(cfg, heartbeat);
+  // For regular heartbeats, inject HEARTBEAT.md contents directly into the prompt
+  // so the model doesn't need file-read access (local models like qwen can't read files).
+  let prompt: string;
+  if (hasExecCompletion) {
+    prompt = EXEC_EVENT_PROMPT;
+  } else if (hasCronEvents) {
+    prompt = CRON_EVENT_PROMPT;
+  } else {
+    const basePrompt = resolveHeartbeatPrompt(cfg, heartbeat);
+    prompt = heartbeatFileContent ? `${heartbeatFileContent}\n\n${basePrompt}` : basePrompt;
+  }
   const ctx = {
     Body: prompt,
     From: sender,

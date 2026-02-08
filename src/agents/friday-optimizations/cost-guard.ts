@@ -20,6 +20,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   "claude-sonnet": { input: 3.0, output: 15.0 },
   gemini: { input: 0.3, output: 2.5 },
   "gpt-4o": { input: 2.5, output: 10.0 },
+  kimi: { input: 0.0, output: 0.0 },
   qwen: { input: 0.0, output: 0.0 },
   llama: { input: 0.0, output: 0.0 },
   deepseek: { input: 0.0, output: 0.0 },
@@ -68,9 +69,9 @@ export interface CostStatus {
 
 // Default limits
 const DEFAULT_LIMITS: CostLimits = {
-  maxInputTokens: 50_000,
-  maxOutputTokens: 8_000,
-  maxToolCalls: 20,
+  maxInputTokens: 128_000,
+  maxOutputTokens: 16_000,
+  maxToolCalls: 30,
   maxSessionDollars: 2.0,
   maxHourlyDollars: 5.0,
   downgradeThreshold: 0.7,
