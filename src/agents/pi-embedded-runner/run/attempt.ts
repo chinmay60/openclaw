@@ -845,19 +845,40 @@ export async function runEmbeddedAttempt(
           });
 
           // FRIDAY OPTIMIZATION: Cost guard check before LLM call
-          // Estimates input tokens and checks against budget limits
-          const estimatedInputTokens = Math.ceil(
-            (effectivePrompt.length + JSON.stringify(activeSession.messages).length) / 4,
-          );
-          const costCheck = checkCost(estimatedInputTokens, params.modelId ?? "unknown");
-          if (!costCheck.allowed) {
-            log.warn(`[friday-opt] Cost guard BLOCKED call: ${costCheck.reason}`);
-            throw new Error(`Cost limit exceeded: ${costCheck.reason}`);
-          }
-          if (costCheck.suggestedModel) {
-            log.info(
-              `[friday-opt] Cost guard suggests downgrade to ${costCheck.suggestedModel} (budget ${getCostStatusString()})`,
+          // Never throws, never blocks — degrades gracefully to local model
+          try {
+            const estimatedInputTokens = Math.ceil(
+              (effectivePrompt.length + JSON.stringify(activeSession.messages).length) / 4,
             );
+            const costCheck = checkCost(
+              estimatedInputTokens,
+              params.modelId ?? "unknown",
+              effectivePrompt,
+            );
+            if (!costCheck.allowed) {
+              // Budget exhausted — fall back to free local model instead of crashing
+              log.warn(
+                `[friday-opt] Cost guard budget exhausted: ${costCheck.reason} — falling back to local model`,
+              );
+              params.modelId = "qwen3:32b";
+              params.provider = "ollama";
+            } else if (costCheck.suggestedModel) {
+              log.info(
+                `[friday-opt] Cost guard DOWNGRADING ${params.modelId} → ${costCheck.suggestedModel} (budget ${getCostStatusString()})`,
+              );
+              params.modelId = costCheck.suggestedModel;
+              if (costCheck.suggestedModel.startsWith("ollama/")) {
+                params.provider = "ollama";
+              } else if (costCheck.suggestedModel.startsWith("openrouter/")) {
+                params.provider = "openrouter";
+              } else if (costCheck.suggestedModel.startsWith("nvidia/")) {
+                params.provider = "nvidia";
+              }
+            }
+          } catch (costErr) {
+            // Cost guard itself failed — log and proceed with original model
+            // Never let cost guard crash the run
+            log.warn(`[friday-opt] Cost guard error (proceeding anyway): ${costErr}`);
           }
 
           const shouldTrackCacheTtl =

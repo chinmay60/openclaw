@@ -31,6 +31,7 @@ const DOWNGRADE_CHAIN = [
   "openrouter/anthropic/claude-opus-4.5",
   "openrouter/anthropic/claude-sonnet-4",
   "openrouter/google/gemini-2.5-flash",
+  "nvidia/moonshotai/kimi-k2.5",
   "ollama/qwen3:32b",
 ];
 
@@ -49,6 +50,8 @@ export interface CostRecord {
   cost: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   model: string;
 }
 
@@ -91,7 +94,9 @@ let stateLoaded = false;
  * Load state from disk.
  */
 function loadState(): void {
-  if (stateLoaded) return;
+  if (stateLoaded) {
+    return;
+  }
 
   try {
     if (fs.existsSync(STATE_FILE)) {
@@ -153,10 +158,13 @@ function appendMetrics(record: CostRecord): void {
 
     // Add header if file doesn't exist
     if (!fs.existsSync(METRICS_FILE)) {
-      fs.writeFileSync(METRICS_FILE, "timestamp,model,input_tokens,output_tokens,cost\n");
+      fs.writeFileSync(
+        METRICS_FILE,
+        "timestamp,model,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost\n",
+      );
     }
 
-    const line = `${record.timestamp},${record.model},${record.inputTokens},${record.outputTokens},${record.cost.toFixed(6)}\n`;
+    const line = `${record.timestamp},${record.model},${record.inputTokens},${record.outputTokens},${record.cacheReadTokens},${record.cacheWriteTokens},${record.cost.toFixed(6)}\n`;
     fs.appendFileSync(METRICS_FILE, line);
   } catch {
     // Ignore errors
@@ -166,12 +174,24 @@ function appendMetrics(record: CostRecord): void {
 /**
  * Calculate cost for a model call.
  */
-function calculateCost(inputTokens: number, outputTokens: number, model: string): number {
+function calculateCost(
+  inputTokens: number,
+  outputTokens: number,
+  model: string,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
+): number {
   const modelLower = model.toLowerCase();
 
   for (const [key, prices] of Object.entries(MODEL_PRICING)) {
     if (modelLower.includes(key)) {
-      return (inputTokens * prices.input + outputTokens * prices.output) / 1_000_000;
+      return (
+        (inputTokens * prices.input +
+          outputTokens * prices.output +
+          cacheReadTokens * prices.input * 0.1 +
+          cacheWriteTokens * prices.input * 1.25) /
+        1_000_000
+      );
     }
   }
 
@@ -207,7 +227,11 @@ export function configureLimits(newLimits: Partial<CostLimits>): void {
 /**
  * Pre-flight check before API call.
  */
-export function checkCost(inputTokens: number, model: string): CostCheckResult {
+export function checkCost(
+  inputTokens: number,
+  model: string,
+  promptText?: string,
+): CostCheckResult {
   loadState();
 
   const result: CostCheckResult = {
@@ -252,7 +276,7 @@ export function checkCost(inputTokens: number, model: string): CostCheckResult {
     return result;
   }
 
-  // Check if should suggest downgrade
+  // Check if should suggest downgrade (budget pressure)
   const sessionPct = sessionCost / limits.maxSessionDollars;
   if (sessionPct >= limits.downgradeThreshold) {
     const suggested = getCheaperModel(model);
@@ -261,16 +285,69 @@ export function checkCost(inputTokens: number, model: string): CostCheckResult {
     }
   }
 
+  // Proactive downgrade: route simple queries to cheaper models
+  if (promptText && !result.suggestedModel) {
+    const complexity = estimateComplexity(promptText);
+    if (complexity === "simple" && model.includes("opus")) {
+      result.suggestedModel = "openrouter/anthropic/claude-sonnet-4";
+    }
+  }
+
   return result;
+}
+
+/**
+ * Estimate query complexity from prompt text.
+ * Pure keyword heuristics — no ML, no LLM.
+ */
+export function estimateComplexity(prompt: string): "simple" | "moderate" | "complex" {
+  const lower = new Set(prompt.toLowerCase().slice(0, 500));
+  const complexSignals = [
+    "analyze",
+    "design",
+    "debug",
+    "refactor",
+    "implement",
+    "architect",
+    "optimize",
+    "compare",
+    "review",
+  ];
+  const simpleSignals = [
+    "what is",
+    "what's",
+    "show me",
+    "status",
+    "check",
+    "how do i",
+    "when did",
+    "where is",
+    "list",
+  ];
+
+  if (complexSignals.some((s) => lower.has(s))) return "complex";
+  if (simpleSignals.some((s) => lower.has(s)) && prompt.length < 500) {
+    return "simple";
+  }
+  if (prompt.length < 200) {
+    return "simple";
+  }
+  return "moderate";
 }
 
 /**
  * Record a completed API call.
  */
-export function recordCost(inputTokens: number, outputTokens: number, model: string): void {
+export function recordCost(
+  inputTokens: number,
+  outputTokens: number,
+  model: string,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
+): void {
   loadState();
 
-  const cost = calculateCost(inputTokens, outputTokens, model);
+  const cost = calculateCost(inputTokens, outputTokens, model, cacheReadTokens, cacheWriteTokens);
 
   sessionCost += cost;
   sessionCalls += 1;
@@ -280,6 +357,8 @@ export function recordCost(inputTokens: number, outputTokens: number, model: str
     cost,
     inputTokens,
     outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     model,
   };
 

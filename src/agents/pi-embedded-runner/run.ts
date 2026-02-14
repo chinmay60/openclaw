@@ -19,6 +19,7 @@ import {
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { recordCost } from "../friday-optimizations/cost-guard.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -797,6 +798,20 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+
+          // Record cost metrics (including cache tokens) for budget tracking
+          try {
+            recordCost(
+              usageAccumulator.input,
+              usageAccumulator.output,
+              lastAssistant?.model ?? model.id,
+              usageAccumulator.cacheRead,
+              usageAccumulator.cacheWrite,
+            );
+          } catch {
+            // Cost recording is non-critical — don't fail the run
+          }
+
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
